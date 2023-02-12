@@ -4,8 +4,8 @@
 
   LinuxCNC (EMC2) post processor configuration.
 
-  $Revision: 43701 be9c82391145c95b055a2993a4d90669fd20eec1 $
-  $Date: 2022-03-16 20:05:39 $
+  $Revision: 43918 5ccca3f1379e076570c8caa9f7f2d81c115ec2ce $
+  $Date: 2022-08-18 06:52:06 $
 
   FORKID {52A5C3D6-1533-413E-B493-7B93D9E48B30}
 */
@@ -39,7 +39,7 @@ properties = {
   writeMachine: {
     title      : "Write machine",
     description: "Output the machine settings in the header of the code.",
-    group      : 0,
+    group      : "formats",
     type       : "boolean",
     value      : true,
     scope      : "post"
@@ -47,7 +47,7 @@ properties = {
   writeTools: {
     title      : "Write tool list",
     description: "Output a tool list in the header of the code.",
-    group      : 0,
+    group      : "formats",
     type       : "boolean",
     value      : true,
     scope      : "post"
@@ -55,22 +55,28 @@ properties = {
   preloadTool: {
     title      : "Preload tool",
     description: "Preloads the next tool at a tool change (if any).",
+    group      : "preferences",
     type       : "boolean",
     value      : true,
     scope      : "post"
   },
   showSequenceNumbers: {
     title      : "Use sequence numbers",
-    description: "Use sequence numbers for each block of outputted code.",
-    group      : 1,
-    type       : "boolean",
-    value      : true,
-    scope      : "post"
+    description: "'Yes' outputs sequence numbers on each block, 'Only on tool change' outputs sequence numbers on tool change blocks only, and 'No' disables the output of sequence numbers.",
+    group      : "formats",
+    type       : "enum",
+    values     : [
+      {title:"Yes", id:"true"},
+      {title:"No", id:"false"},
+      {title:"Only on tool change", id:"toolChange"}
+    ],
+    value: "true",
+    scope: "post"
   },
   sequenceNumberStart: {
     title      : "Start sequence number",
     description: "The number at which to start the sequence numbers.",
-    group      : 1,
+    group      : "formats",
     type       : "integer",
     value      : 10,
     scope      : "post"
@@ -78,7 +84,7 @@ properties = {
   sequenceNumberIncrement: {
     title      : "Sequence number increment",
     description: "The amount by which the sequence number is incremented by in each block.",
-    group      : 1,
+    group      : "formats",
     type       : "integer",
     value      : 5,
     scope      : "post"
@@ -86,6 +92,7 @@ properties = {
   optionalStop: {
     title      : "Optional stop",
     description: "Outputs optional stop code during when necessary in the code.",
+    group      : "preferences",
     type       : "boolean",
     value      : true,
     scope      : "post"
@@ -93,6 +100,7 @@ properties = {
   separateWordsWithSpace: {
     title      : "Separate words with space",
     description: "Adds spaces between words if 'yes' is selected.",
+    group      : "formats",
     type       : "boolean",
     value      : true,
     scope      : "post"
@@ -100,6 +108,7 @@ properties = {
   useRadius: {
     title      : "Radius arcs",
     description: "If yes is selected, arcs are outputted using radius values rather than IJK.",
+    group      : "preferences",
     type       : "boolean",
     value      : false,
     scope      : "post"
@@ -107,6 +116,7 @@ properties = {
   useParametricFeed: {
     title      : "Parametric feed",
     description: "Specifies the feed value that should be output using a Q value.",
+    group      : "preferences",
     type       : "boolean",
     value      : false,
     scope      : "post"
@@ -114,13 +124,30 @@ properties = {
   showNotes: {
     title      : "Show notes",
     description: "Writes operation notes as comments in the outputted code.",
+    group      : "formats",
     type       : "boolean",
     value      : false,
     scope      : "post"
   },
+  useSmoothing: {
+    title      : "Use smoothing",
+    description: "Defines the smoothing control mode (G64/G61).",
+    group      : "preferences",
+    type       : "enum",
+    values     : [
+      {title:"G64", id:"0"},
+      {title:"G64 with P", id:"1"},
+      {title:"G64 with PQ", id:"2"},
+      {title:"G61", id:"3"},
+      {title:"G61.1", id:"4"}
+    ],
+    value: "2",
+    scope: "post"
+  },
   safePositionMethod: {
     title      : "Safe Retracts",
     description: "Select your desired retract option. 'Clearance Height' retracts to the operation clearance height.",
+    group      : "homePositions",
     type       : "enum",
     values     : [
       {title:"G28", id:"G28"},
@@ -129,6 +156,22 @@ properties = {
     ],
     value: "G53",
     scope: "post"
+  },
+  useG95ForTapping: {
+    title      : "Use G95 for tapping",
+    description: "use IPR/MPR instead of IPM/MPM for tapping",
+    group      : "preferences",
+    type       : "boolean",
+    value      : false,
+    scope      : "post"
+  },
+  useRigidTapping: {
+    title      : "Use rigid tapping",
+    description: "Disable to use G84/G74 for tapping cycle with the floating head.",
+    group      : "preferences",
+    type       : "boolean",
+    value      : true,
+    scope      : "post"
   }
 };
 
@@ -182,6 +225,7 @@ var aOutput = createVariable({prefix:"A"}, abcFormat);
 var bOutput = createVariable({prefix:"B"}, abcFormat);
 var cOutput = createVariable({prefix:"C"}, abcFormat);
 var feedOutput = createVariable({prefix:"F"}, feedFormat);
+var pitchOutput = createVariable({prefix:"F", force:true}, pitchFormat);
 var sOutput = createVariable({prefix:"S", force:true}, rpmFormat);
 var dOutput = createVariable({}, dFormat);
 
@@ -219,7 +263,7 @@ function writeBlock() {
   if (!text) {
     return;
   }
-  if (getProperty("showSequenceNumbers")) {
+  if (getProperty("showSequenceNumbers") == "true") {
     writeWords2("N" + sequenceNumber, arguments);
     sequenceNumber += getProperty("sequenceNumberIncrement");
     if (sequenceNumber > 99999) {
@@ -231,10 +275,20 @@ function writeBlock() {
 }
 
 /**
+  Writes the specified block - used for tool changes only.
+*/
+function writeToolBlock() {
+  var show = getProperty("showSequenceNumbers");
+  setProperty("showSequenceNumbers", (show == "true" || show == "toolChange") ? "true" : "false");
+  writeBlock(arguments);
+  setProperty("showSequenceNumbers", show);
+}
+
+/**
   Writes the specified optional block.
 */
 function writeOptionalBlock() {
-  if (getProperty("showSequenceNumbers")) {
+  if (getProperty("showSequenceNumbers") == "true") {
     var words = formatWords(arguments);
     if (words) {
       writeWords("/", "N" + sequenceNumber, words);
@@ -398,9 +452,6 @@ function onOpen() {
     writeBlock(gUnitModal.format(21));
     break;
   }
-
-  // EMD 20211025 - set G64 with tolerance
-  writeBlock(gUnitModal.format(64), "P" + xyzFormat.format(0.001));
 }
 
 function onComment(message) {
@@ -438,6 +489,141 @@ function FeedContext(id, description, feed) {
   this.description = description;
   this.feed = feed;
 }
+
+// Start of smoothing logic
+var smoothingSettings = {
+  roughing              : 3, // roughing level for smoothing in automatic mode
+  semi                  : 2, // semi-roughing level for smoothing in automatic mode
+  semifinishing         : 2, // semi-finishing level for smoothing in automatic mode
+  finishing             : 1, // finishing level for smoothing in automatic mode
+  thresholdRoughing     : toPreciseUnit(0.5, MM), // operations with stock/tolerance above that threshold will use roughing level in automatic mode
+  thresholdFinishing    : toPreciseUnit(0.05, MM), // operations with stock/tolerance below that threshold will use finishing level in automatic mode
+  thresholdSemiFinishing: toPreciseUnit(0.1, MM), // operations with stock/tolerance above finishing and below threshold roughing that threshold will use semi finishing level in automatic mode
+
+  differenceCriteria: "tolerance", // options: "level", "tolerance", "both". Specifies criteria when output smoothing codes
+  autoLevelCriteria : "stock", // use "stock" or "tolerance" to determine levels in automatic mode
+  cancelCompensation: false // tool length compensation must be canceled prior to changing the smoothing level
+};
+
+// collected state below, do not edit
+var smoothing = {
+  cancel     : false, // cancel tool length prior to update smoothing for this operation
+  isActive   : false, // the current state of smoothing
+  isAllowed  : false, // smoothing is allowed for this operation
+  isDifferent: false, // tells if smoothing levels/tolerances/both are different between operations
+  level      : -1, // the active level of smoothing
+  tolerance  : -1, // the current operation tolerance
+  force      : false // smoothing needs to be forced out in this operation
+};
+
+function initializeSmoothing() {
+  var previousLevel = smoothing.level;
+  var previousTolerance = smoothing.tolerance;
+
+  // determine new smoothing levels and tolerances
+  smoothing.level = parseInt(getProperty("useSmoothing"), 10);
+  smoothing.level = isNaN(smoothing.level) ? -1 : smoothing.level;
+  smoothing.tolerance = Math.max(getParameter("operation:tolerance", smoothingSettings.thresholdFinishing), 0);
+
+  // automatically determine smoothing level
+  if (smoothing.level == 9999) {
+    if (smoothingSettings.autoLevelCriteria == "stock") { // determine auto smoothing level based on stockToLeave
+      var stockToLeave = xyzFormat.getResultingValue(getParameter("operation:stockToLeave", 0));
+      var verticalStockToLeave = xyzFormat.getResultingValue(getParameter("operation:verticalStockToLeave", 0));
+      if (((stockToLeave >= smoothingSettings.thresholdRoughing) && (verticalStockToLeave >= smoothingSettings.thresholdRoughing)) ||
+          getParameter("operation:strategy", "") == "face") {
+        smoothing.level = smoothingSettings.roughing; // set roughing level
+      } else {
+        if (((stockToLeave >= smoothingSettings.thresholdSemiFinishing) && (stockToLeave < smoothingSettings.thresholdRoughing)) &&
+          ((verticalStockToLeave >= smoothingSettings.thresholdSemiFinishing) && (verticalStockToLeave  < smoothingSettings.thresholdRoughing))) {
+          smoothing.level = smoothingSettings.semi; // set semi level
+        } else if (((stockToLeave >= smoothingSettings.thresholdFinishing) && (stockToLeave < smoothingSettings.thresholdSemiFinishing)) &&
+          ((verticalStockToLeave >= smoothingSettings.thresholdFinishing) && (verticalStockToLeave  < smoothingSettings.thresholdSemiFinishing))) {
+          smoothing.level = smoothingSettings.semifinishing; // set semi-finishing level
+        } else {
+          smoothing.level = smoothingSettings.finishing; // set finishing level
+        }
+      }
+    } else { // detemine auto smoothing level based on operation tolerance instead of stockToLeave
+      if (smoothing.tolerance >= smoothingSettings.thresholdRoughing ||
+          getParameter("operation:strategy", "") == "face") {
+        smoothing.level = smoothingSettings.roughing; // set roughing level
+      } else {
+        if (((smoothing.tolerance >= smoothingSettings.thresholdSemiFinishing) && (smoothing.tolerance < smoothingSettings.thresholdRoughing))) {
+          smoothing.level = smoothingSettings.semi; // set semi level
+        } else if (((smoothing.tolerance >= smoothingSettings.thresholdFinishing) && (smoothing.tolerance < smoothingSettings.thresholdSemiFinishing))) {
+          smoothing.level = smoothingSettings.semifinishing; // set semi-finishing level
+        } else {
+          smoothing.level = smoothingSettings.finishing; // set finishing level
+        }
+      }
+    }
+  }
+  if (smoothing.level == -1) { // useSmoothing is disabled
+    smoothing.isAllowed = false;
+  } else { // do not output smoothing for the following operations
+    smoothing.isAllowed = !(currentSection.getTool().type == TOOL_PROBE || currentSection.checkGroup(STRATEGY_DRILLING));
+  }
+  if (!smoothing.isAllowed) {
+    smoothing.level = -1;
+    smoothing.tolerance = -1;
+  }
+
+  switch (smoothingSettings.differenceCriteria) {
+  case "level":
+    smoothing.isDifferent = smoothing.level != previousLevel;
+    break;
+  case "tolerance":
+    smoothing.isDifferent = xyzFormat.areDifferent(smoothing.tolerance, previousTolerance);
+    break;
+  case "both":
+    smoothing.isDifferent = smoothing.level != previousLevel || xyzFormat.areDifferent(smoothing.tolerance, previousTolerance);
+    break;
+  default:
+    error(localize("Unsupported smoothing criteria."));
+    return;
+  }
+
+  // tool length compensation needs to be canceled when smoothing state/level changes
+  if (smoothingSettings.cancelCompensation) {
+    smoothing.cancel = !isFirstSection() && smoothing.isDifferent;
+  }
+}
+
+function setSmoothing(mode) {
+  if (mode == smoothing.isActive && (!mode || !smoothing.isDifferent) && !smoothing.force) {
+    return; // return if smoothing is already active or is not different
+  }
+  if (typeof lengthCompensationActive != "undefined" && smoothingSettings.cancelCompensation) {
+    validate(!lengthCompensationActive, "Length compensation is active while trying to update smoothing.");
+  }
+  if (mode) { // enable smoothing
+    var _tolerance = xyzFormat.format(smoothing.tolerance);
+    switch (getProperty("useSmoothing")) {
+    case "0":
+      writeBlock(gFormat.format(64));
+      break;
+    case "1":
+      writeBlock(gFormat.format(64), "P" +  _tolerance);
+      break;
+    case "2":
+      writeBlock(gFormat.format(64), "P" +  _tolerance, "Q" + _tolerance);
+      break;
+    case "3":
+      writeBlock(gFormat.format(61));
+      break;
+    case "4":
+      writeBlock(gFormat.format(61.1));
+      break;
+    }
+  } else { // disable smoothing
+    // no gcodes to disable smoothing available
+  }
+  smoothing.isActive = mode;
+  smoothing.force = false;
+  smoothing.isDifferent = false;
+}
+// End of smoothing logic
 
 function getFeed(f) {
   if (activeMovements) {
@@ -705,15 +891,20 @@ function onSection() {
     (!machineConfiguration.isMultiAxisConfiguration() && currentSection.isMultiAxis()) ||
     (!getPreviousSection().isMultiAxis() && currentSection.isMultiAxis() ||
       getPreviousSection().isMultiAxis() && !currentSection.isMultiAxis()); // force newWorkPlane between indexing and simultaneous operations
-  if (insertToolCall || newWorkOffset || newWorkPlane) {
 
+  // define smoothing mode
+  initializeSmoothing();
+
+  if (insertToolCall || newWorkOffset || newWorkPlane || smoothing.cancel) {
     // stop spindle before retract during tool change
     if (insertToolCall && !isFirstSection()) {
       onCommand(COMMAND_STOP_SPINDLE);
     }
-
     // retract to safe plane
     writeRetract(Z);
+    if (smoothing.cancel) {
+      setSmoothing(false);
+    }
   }
 
   if (hasParameter("operation-comment")) {
@@ -751,7 +942,7 @@ function onSection() {
       warning(localize("Tool number exceeds maximum value."));
     }
 
-    writeBlock("T" + toolFormat.format(tool.number), mFormat.format(6));
+    writeToolBlock("T" + toolFormat.format(tool.number), mFormat.format(6));
     if (tool.comment) {
       writeComment(tool.comment);
     }
@@ -817,6 +1008,8 @@ function onSection() {
   }
 
   forceXYZ();
+
+  setSmoothing(smoothing.isAllowed);
 
   if (machineConfiguration.isMultiAxisConfiguration()) { // use 5-axis indexing for multi-axis mode
     var abc = new Vector(0, 0, 0);
@@ -938,28 +1131,49 @@ function onCyclePoint(x, y, z) {
   case "tapping":
   case "left-tapping":
   case "right-tapping":
-    cycleExpanded = true;
-    repositionToCycleClearance(cycle, x, y, z);
-    writeBlock(
-      gAbsIncModal.format(90), gMotionModal.format(0),
-      conditional(gPlaneModal.getCurrent() == 17, zOutput.format(cycle.retract)),
-      conditional(gPlaneModal.getCurrent() == 18, yOutput.format(cycle.retract)),
-      conditional(gPlaneModal.getCurrent() == 19, xOutput.format(cycle.retract))
-    );
-    writeBlock(
-      gAbsIncModal.format(90), gFormat.format(33.1),
-      conditional(gPlaneModal.getCurrent() == 17, zOutput.format(z)),
-      conditional(gPlaneModal.getCurrent() == 18, yOutput.format(y)),
-      conditional(gPlaneModal.getCurrent() == 19, xOutput.format(x)),
-      "K" + pitchFormat.format(tool.threadPitch)
-    );
-    gMotionModal.reset();
-    writeBlock(
-      gAbsIncModal.format(90), gMotionModal.format(0),
-      conditional(gPlaneModal.getCurrent() == 17, zOutput.format(cycle.clearance)),
-      conditional(gPlaneModal.getCurrent() == 18, yOutput.format(cycle.clearance)),
-      conditional(gPlaneModal.getCurrent() == 19, xOutput.format(cycle.clearance))
-    );
+    if (getProperty("useRigidTapping")) {
+      cycleExpanded = true;
+      repositionToCycleClearance(cycle, x, y, z);
+      writeBlock(
+        gAbsIncModal.format(90), gMotionModal.format(0),
+        conditional(gPlaneModal.getCurrent() == 17, zOutput.format(cycle.retract)),
+        conditional(gPlaneModal.getCurrent() == 18, yOutput.format(cycle.retract)),
+        conditional(gPlaneModal.getCurrent() == 19, xOutput.format(cycle.retract))
+      );
+      writeBlock(
+        gAbsIncModal.format(90), gFormat.format(33.1),
+        conditional(gPlaneModal.getCurrent() == 17, zOutput.format(z)),
+        conditional(gPlaneModal.getCurrent() == 18, yOutput.format(y)),
+        conditional(gPlaneModal.getCurrent() == 19, xOutput.format(x)),
+        "K" + pitchFormat.format(tool.threadPitch)
+      );
+      gMotionModal.reset();
+      writeBlock(
+        gAbsIncModal.format(90), gMotionModal.format(0),
+        conditional(gPlaneModal.getCurrent() == 17, zOutput.format(cycle.clearance)),
+        conditional(gPlaneModal.getCurrent() == 18, yOutput.format(cycle.clearance)),
+        conditional(gPlaneModal.getCurrent() == 19, xOutput.format(cycle.clearance))
+      );
+    } else {
+      if (cycleType == "tapping") {
+        var code = (tool.type == TOOL_TAP_LEFT_HAND) ? 74 : 84;
+      } else {
+        var code = (cycleType == "left-tapping") ? 74 : 84;
+      }
+      var P = !cycle.dwell ? 0 : clamp(0.001, cycle.dwell, 99999999); // in seconds
+      var F;
+      if (getProperty("useG95ForTapping")) {
+        writeBlock(gFeedModeModal.format(95));
+        F = pitchOutput.format(tool.threadPitch);
+      } else {
+        F = feedOutput.format(tool.getThreadPitch() * rpmFormat.getResultingValue(spindleSpeed));
+      }
+      writeBlock(
+        gRetractModal.format(98), gAbsIncModal.format(90), gCycleModal.format(code),
+        getCommonCycle(x, y, z, cycle.retract),
+        "P" + secFormat.format(P), F
+      );
+    }
     return;
   /*
   case "tapping-with-chip-breaking":
@@ -1034,6 +1248,10 @@ function onCyclePoint(x, y, z) {
       break;
     */
     case "reaming":
+      if (feedFormat.getResultingValue(cycle.feedrate) != feedFormat.getResultingValue(cycle.retractFeedrate)) {
+        expandCyclePoint(x, y, z);
+        break;
+      }
       if (P > 0) {
         writeBlock(
           gRetractModal.format(98), gAbsIncModal.format(90), gCycleModal.format(89),
@@ -1066,6 +1284,10 @@ function onCyclePoint(x, y, z) {
       );
       break;
     case "boring":
+      if (feedFormat.getResultingValue(cycle.feedrate) != feedFormat.getResultingValue(cycle.retractFeedrate)) {
+        expandCyclePoint(x, y, z);
+        break;
+      }
       if (P > 0) {
         writeBlock(
           gRetractModal.format(98), gAbsIncModal.format(90), gCycleModal.format(89),
@@ -1114,7 +1336,7 @@ function onCyclePoint(x, y, z) {
 
 function onCycleEnd() {
   if (!cycleExpanded) {
-    writeBlock(gCycleModal.format(80));
+    writeBlock(gCycleModal.format(80), conditional(getProperty("useG95ForTapping"), gFeedModeModal.format(94)));
     gMotionModal.reset();
   }
 }
@@ -1517,7 +1739,6 @@ function onClose() {
   setCoolant(COOLANT_OFF);
 
   writeRetract(Z);
-
   setWorkPlane(new Vector(0, 0, 0)); // reset working plane
 
   // writeRetract(X, Y);
